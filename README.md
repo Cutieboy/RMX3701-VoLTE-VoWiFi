@@ -41,7 +41,7 @@ The report is written to `reports\rmx3701-diagnostic-<timestamp>.txt`. Review an
 
 ## MTS `iccid_0` workaround
 
-The experimental helper is documented at [scripts/rmx3701-mts-iccid-workaround.sh](scripts/rmx3701-mts-iccid-workaround.sh). It is **not run automatically** and must be invoked explicitly. It refuses to overwrite an unrelated non-empty value and creates a backup first. Do not enable it for another carrier without understanding that carrier's `iccid_0` format on this firmware.
+The experimental helper is documented at [scripts/rmx3701-mts-iccid-workaround.sh](scripts/rmx3701-mts-iccid-workaround.sh). It is **not run automatically**. It requires both a locally supplied `RMX3701_MTS_ICCID` value and an explicit `--force` argument, creates a backup, and refuses to overwrite an unrelated non-empty value. Do not enable it for another carrier without understanding that carrier's `iccid_0` format on this firmware.
 
 ## Safety
 
