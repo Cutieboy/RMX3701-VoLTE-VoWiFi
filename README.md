@@ -1,219 +1,60 @@
-# Sailfish OS for the Lenovo Vibe K6 Note / Plus (`karatep`)
+# RMX3701 VoLTE / VoWiFi recovery
 
-An unofficial Sailfish OS **5.1.0.11 (Pispala)** hardware adaptation for the Lenovo Vibe K6
-Note / Plus — Qualcomm **MSM8937** (Snapdragon 430), Adreno 505 — built on the
-**LineageOS 18.1 / Android 11** hybris base, `aarch64` userspace, Linux 3.18.
+**Target device:** Realme GT Neo 5 SE (`RMX3701` / `RE58D1L1`)  
+**Platform:** Qualcomm SM7475, arm64  
+**Tested system:** Android 16 / Realme UI 7.0, build `RMX3701_16.0.5.1300(EX01)`  
+**Known working carrier:** MTS Russia (MCC 250, MNC 01)
 
-> This is the documentation hub for the [Sailfish-on-karatep](https://github.com/Sailfish-on-karatep)
-> organisation. Start here.
+This repository is a focused, device-specific toolkit for understanding and recovering Qualcomm MBN/IMS profile selection on RMX3701. It is **not** a ROM port, firmware flasher, or universal VoLTE unlocker.
 
----
+> **Important:** This is an experimental community project. The RMX3701 has achieved working VoLTE and VoWiFi, but the exact causal contribution of each workaround has not been isolated. Do not treat every workaround as a proven universal repair.
 
-## Build status
+## Current findings on RMX3701
 
-**Boots to UI.** The device reaches the Sailfish OS home screen unaided.
+- The device firmware includes an MTS software MBN at `/data/vendor/modem_config/mcfg_sw/generic/Russia/MTS/Commercial/RU/mcfg_sw.mbn`.
+- The live QCRIL database is `/data/vendor/radio/qcrilNr.db` (not the `qcril.db` used by the upstream karatep project).
+- A prior diagnostic run reported empty software-MBN indexing tables and `No MBN file selected`.
+- VoLTE and VoWiFi started working after a persistent KernelSU service script rewrote `/data/vendor/radio/iccid_0` to `<ICCID>,250,01` and the device was rebooted. This is an observed correlation, not proof that the file alone caused the fix.
+- A duplicate Oplus VoWiFi Fix module directory with a leading BOM character was disabled; VoLTE, VoWiFi, Mouse VPN and Batman VPN remained working after reboot.
 
-### Currently working on
+## What this repository does — and does not do
 
-VoLTE call testing, and power management with the unclean shutdown. Cellular is otherwise done: calls, SMS,
-USSD, DTMF and mobile data are all verified on hardware.
+It provides concise RMX3701-specific documentation, a **read-only** ADB/PowerShell diagnostic collector, an explicitly invoked backup-aware MTS `iccid_0` helper, and notes about adapting the upstream research.
 
-### Recently fixed
+It does **not** insert guessed rows into `qcrilNr.db`, rewrite arbitrary MBN files, modify modem NV/EFS, flash modem partitions, blindly restart RIL/QCRIL services, or claim that changing `iccid_0` is the universal solution for all carriers.
 
-| | |
-|---|---|
-| **The camera died the moment video recording started** | Two stacked faults. With no `jolla-camera-hw.txt` on this port the app picked the largest size the HAL advertises — 3840x2160 — which no encoder here can take: `media_codecs.xml` caps the hardware AVC encoder at 1920x1088 and the Codec2 fallback returns `-EINVAL`, so `droidcamsrc` failed inside `DroidMediaRecorder` and the buffer queue stalled. It never *recovered* for an unrelated reason: `minimediaservice` waits forever for `media.audio_flinger`, a binder service Sailfish does not have, and since `CameraService` is hosted in that same process its binder threads parked and every later camera call queued behind them. Fixed by capping video at 1080p and requiring `audiosystem-passthrough-dummy-af`. Both cameras verified recording 1080p H.264 + AAC on hardware. → [full analysis](docs/rca/camera-dies-on-record.md) |
-| **Enrolled fingerprints "lost" after a reboot; re-enrolment errors out** | karatep's FPC HAL fails `enumerate()` precisely when templates exist — the vendor library returns the count and the HIDL service treats non-zero as an error. The daemon therefore never loaded its finger map and reported nothing enrolled, while the TEE still held the templates, so re-enrolling the same finger was refused with `do_enroll finger already enrolled`. Nothing was ever lost. Fixed in the `sailfish-fpd-community` fork; `GetAll` returns both fingers again. → [details](docs/porting-notes.md#enrolled-fingerprints-vanish-after-a-reboot-and-re-enrolment-fails) |
-| **No audio at all, on any output, plus no microphone** | Three independent faults stacked. A 21-byte `xpolicy.conf.d/fmradio.conf` stub broke `module-policy-enforcement`, so with `arm_droid_default.pa` defaulting to `sink.null`/`source.null` nothing was ever routed off them. This HAL has no `create_audio_patch`, so routing changes after stream open failed with `-ENOSYS` and streams stayed on the device they opened with — which is why only the loudspeaker ever worked. And the vendor policy config omits the built-in mics from the `primary input` route, so capture was opened as `AUDIO_SOURCE_VOICE_CALL` and refused. Loudspeaker, earpiece, 3.5 mm and all mics verified on hardware; Fluence dual-mic noise suppression enabled (+21 dB SNR, measured). → [details](docs/porting-notes.md#audio) |
-| **Headset mic dead; 4-pole headsets seen as 3-pole** | The TS3A227E accessory-detection chip never ran a detection, so MBHC classified every headset as a headphone. An inherited LineageOS regression (`8d2f38f67c27`) had braced `-Wmisleading-indentation` around the wrong statements, leaving the `DET_TRIGGER` write unreachable after a `return`. → [details](docs/porting-notes.md#headset-detected-as-headphone-the-ts3a227e-never-ran-a-detection) |
-| **No UI until `killall vndservicemanager`** | Early vendor services linked the system copy of `libbinder` (`SYST`) instead of the VNDK copy (`VNDR`), so every `/dev/vndbinder` lookup was rejected and the graphics composer crash-looped. Verified on hardware: composer starts once, no `Parcel` errors, lipstick comes up unaided. → [full analysis](docs/rca/vndservicemanager-libbinder.md) |
-| **WLAN did not come up** | Two independent causes: `wlan.ko` must match the running kernel exactly (so droid-hal has to be rebuilt after *any* kernel change), and it must be loaded early by `wlan-module-load.service` — a late `modprobe` always returns `ENODEV`. → [details](docs/porting-notes.md#wlan) |
-| **Build died on `external/chromium-webview`** | LineageOS' manifest links a file that no longer exists upstream, leaving a dangling symlink. The project is now dropped in [`manifests/local_manifests.xml`](manifests/local_manifests.xml). |
-| **No boot splash** (black screen between the Lenovo logo and the UI) | hybris-boot's `HYBRIS_BOOTLOGO` draws the splash with `zcat > /dev/fb0`, which on this panel *always* fails with `ENODEV` — a device-tree/driver mismatch leaves `fb0` with no backing memory until something `mmap()`s it, and MDP5 scans out nothing without an explicit commit. Replaced with `hybris-boot/fbsplash.c`, a 4.4 KB freestanding helper doing `mmap` → `read` → `FBIOPAN_DISPLAY` that then holds the fd (closing it blanks the panel). It must **not** be linked against bionic. Verified on hardware. → [details](docs/porting-notes.md#boot-splash-needs-a-helper-hybris_bootlogos-own-mechanism-cannot-work) |
+## Quick start (Windows PowerShell 7 + ADB over Wi-Fi)
 
-### Feature status
+Confirm ADB connectivity:
 
-Every row states what its status rests on. **✅ means verified on this device** — a hands-on test
-or a measurement, recorded in the linked write-up. **❓ means there is no test on record**, not that
-something is known to be broken.
-
-> **Cellular is now testable, and largely tested.** As of 2026-08-11 a live **BSNL** SIM
-> (MCC 404 / MNC 80) is in slot 1 and a deactivated **Airtel** SIM in slot 2. As of **2026-08-13**
-> calls (CSFB), SMS in both directions, DTMF, USSD and proximity blanking during a call are all
-> verified on hardware from journal and `dmesg` evidence. What that exercise turned up is one real
-> bug — in-call volume, which the ADSP refuses — plus two smaller gaps, NITZ and the emergency
-> number list. Everything cellular except a VoLTE call is now measured rather than guessed.
-
-| Subsystem | Status | Notes |
-|---|---|---|
-| Display | ✅ | pixel ratio 1.6. Includes the boot splash, which needs `hybris-boot/fbsplash.c` — `HYBRIS_BOOTLOGO`'s own `zcat > /dev/fb0` cannot work on this panel → [details](docs/porting-notes.md#boot-splash-needs-a-helper-hybris_bootlogos-own-mechanism-cannot-work) |
-| Touch | ✅ | the same controller also emits the three capacitive keys — see *Keys — home, nav* |
-| Graphics / UI | ✅ | `hwcomposer-2-1` + lipstick; comes up unaided since the `libbinder`/VNDK fix → [full analysis](docs/rca/vndservicemanager-libbinder.md) |
-| Cameras — stills | ✅ | both cameras; full sensor resolution (rear 4632x3474 / 4320x2432, front 3264x2448 / 3264x1836) |
-| Cameras — video | ✅ | both cameras verified recording 1080p H.264 Baseline + AAC-LC 48 kHz stereo, decoded clean end to end. **Capped at 1080p deliberately** — the HAL offers 3840x2160 but the AVC encoder's real limit is 1920x1088. One rough edge left: the frame rate floats with exposure (12.5–16.7 fps measured indoors, 30 fps in good light) because nothing pins `preview-fps-range`, and the video track ends ~0.3–0.7 s before the audio track → [details](docs/rca/camera-dies-on-record.md) |
-| Camera flash / torch | ⚠️ | rear HAL advertises `off, auto, on, torch` and `CameraService` torch state changes were observed on hardware; not yet verified against an actual exposure. Front camera has no flash — no `flash-mode-values` key at all |
-| Camera — other controls | ⚠️ | white balance, exposure compensation, flash and focus modes come straight from the HAL at runtime — jolla-camera derives them itself, so there is nothing to configure and nothing that can be mis-transcribed. The front camera correctly offers no flash and no focus (`focus-mode-values=fixed`, `max-num-focus-areas=0`). **No ISO** — neither camera exposes an `iso-values` key. The HAL also reports `max-zoom=99` and `max-num-detected-faces-hw=10`, neither wired up → [details](docs/porting-notes.md#camera) |
-| Audio — loudspeaker | ✅ | verified on hardware |
-| Audio — 3.5 mm | ✅ | verified, both channels; needs `use_legacy_stream_set_parameters` |
-| Audio — earpiece | ✅ | verified; no call needed, force `output-earpiece` via `output-parking` |
-| Audio — Bluetooth | ✅ | A2DP verified by hand |
-| Mic — built-in (AMIC1) | ✅ | `68: handset-mic` |
-| Mic — secondary (AMIC3) | ✅ | `77: speaker-mic`; dual-mic Fluence enabled |
-| Mic — headset (AMIC2) | ✅ | `85: headset-mic`, after the TS3A227E kernel fix |
-| Bluetooth | ✅ | pairing + A2DP verified. The old "controller init failed" reading was wrong — the HAL logs `Init succeded`; the 61 s cycle was `bluebinder` racing WLAN for the shared WCNSS SoC. Fixed by `Type=oneshot` on `wlan-module-load.service` plus an ordering drop-in; `bluebinder` no longer masked, `NRestarts=0` |
-| WLAN | ✅ | `wlan0` up at boot with the device's real MAC, associates, holds an IP and reaches the internet. **2.4 GHz only — hardware limit**, not a config gap. DNS needed a fix of its own: paranoid networking denied systemd-resolved (uid 997) any socket → [details](docs/porting-notes.md#associated-ip-address-gateway-reachable--and-every-name-lookup-fails) |
-| WLAN — WPA3 | ⚠️ | WPA3-**transition** APs work (WPA2-PSK + PMF) after the prima `MFPEnabled` fix. WPA3-**only** cannot work: SAE needs `NL80211_CMD_EXTERNAL_AUTH` (Linux 4.17), absent on 3.18 → [details](docs/porting-notes.md#wpa3-transition-aps-ctrl-event-assoc-reject-status_code1) |
-| WLAN hotspot | ❓ | never exercised. `jolla-settings-networking-tethering` is in the image and connman runs with only `jolla_rfkill` disabled, so there is nothing known to be missing — but no one has switched it on. (The earlier ❌ here had no test behind it.) |
-| Cellular — SIM 1 / RIL | ✅ | **Registers on the live BSNL SIM.** `/ril_0` is `Online`/`Powered`, IMEI read, SIM `Present`, `PinRequired: none`, registered `auto` on LTE with `Attached: true`. Both modems connect to `android.hardware.radio@1.1::IRadio` (slot1 and slot2) 5 s after ofono starts. `ofono` still sometimes needs `systemctl restart ofono` after boot; expected to improve with the move off the legacy grilio stack |
-| Cellular — bands | ✅ | **No band restriction is imposed by the port.** `TechnologyPreference: any`, `AvailableTechnologies: gsm, umts, lte` on both slots, and ofono cannot filter bands at all — that lives in modem NV and the vendor `mcfg` set. Observed roaming freely between **B1 (EARFCN 515, 2161.5 MHz)** and **B41 (EARFCN 40140, 2545 MHz)** across three cells over 311 samples. Weak indoor signal is hardware: this handset has no **B28**, which is BSNL's 700 MHz coverage layer, and B1/B41 penetrate buildings poorly. RSRP bottoms out near −101 dBm indoors |
-| Cellular — calls | ✅ | **Works, over CSFB.** There is no VoLTE, so the modem falls back LTE → GSM to carry the call and returns afterwards; captured live as `tech 7` → `tech 0` one second before the call went `active`, and confirmed by a D-Bus poll reading `Technology: "gsm"` mid-call. Full state machine `dialing(2) → alerting(3) → active(0)`, clean `reason: 1` teardown. **DTMF works.** Audio *routes* correctly — the droid card switches to the `voicecall` profile, takes `output-earpiece`/`input-voice_call`, and accepts a mid-call port change to the speaker with no `ENOSYS`, so the missing `create_audio_patch` does not bite here. Two caveats: **audibility is not yet verified by a controlled test**, and in-call volume is genuinely broken underneath → see the ⚠️ row below → [details](docs/porting-notes.md#cellular--voice-calls-sms-ussd) |
-| Cellular — in-call volume | ⚠️ | **Broken, and not ours to fix.** The ADSP rejects the CVP voice device config with `ADSP_EBADPARAM` at call setup and then fails every `voice_send_vol_step_cmd` with `ADSP_EFAILED`, which is why `org.ofono.CallVolume` reads `SpeakerVolume 0 / MicrophoneVolume 0 / Muted: true` on a live call. The porter archive shows the same `ADSP_EFAILED` on **64-bit ports generally** — reported on `sargo` under both Sailfish and Ubuntu Touch in 2021 and still open in 2022 — so a 32/64-bit ABI mismatch in the voice calibration path is the leading hypothesis, not a karatep misconfiguration → [rca](docs/rca/voice-call-dsp-calibration.md) |
-| Cellular — SMS | ✅ | **Verified both directions at PDU level.** Send: `tx_queue_entry_new` → `binder_sms_send` → `sendSms`/`sendSmsResponse` → message ref assigned → `tx_finished`. Receive: `newSms` → `binder_sms_incoming` → `ofono_sms_deliver_notify` → `sms_dispatch` → `binder_sms_ack() slot1 ok`, so the network ack goes back and nothing is redelivered. SMSC is read from the SIM. Do not chase `ack: err: -1` — that is `SendSmsResult.errorCode`, which is -1 when not applicable |
-| Cellular — USSD | ✅ | `org.ofono.SupplementaryServices` round-trips against the live network (`*123#` returned the account balance, `*222#` the MSISDN). An invalid code for the operator returns `org.ofono.Error.Failed`, which looks like a broken path but is just the network refusing — try a code the operator serves before concluding anything |
-| Cellular — NITZ / network time | ❌ | `org.ofono.NetworkTime.GetNetworkTime` returns an **empty array** — the network has never delivered a time or time-zone update, so automatic time zone does not work. Invisible in daily use only because NTP keeps the clock right. Not investigated |
-| Cellular — emergency numbers | ⚠️ | `VoiceCallManager.EmergencyNumbers` lists only the generic `911, 112`, not India's `100/101/102/108` — the SIM's ECC list is not reaching ofono, though `droid-hal-init` does process `ril.ecclist` at call time. Untested and unfixed; **do not rely on emergency calling on this port** |
-| Cellular — MMS | ❓ | not tested, by choice |
-| Cellular — mobile data | ✅ | **Works — fixed and verified on hardware.** It was broken because Sailfish disables Android's `netd`, while this vendor's `netmgrd` is a client of the Netd *HAL* and waited forever for `android.system.net.netd@1.1::INetd`; `dsi_netctrl` therefore never handed `rild` a handle and every `SETUP_DATA_CALL` died at `unable to get dsi hndl` → ofono `Unexpected data call status 4100`. `external/stub_netd` publishes that interface with a no-op implementation, leaving routing to connman. Verified: `rmnet_data0` up at `100.103.37.103/28`, connman `online`, ping 8.8.8.8 3/3 at 71 ms, HTTP 200 over cellular. Note cellular data only activates while WiFi is off — connman prefers WiFi, which is ordinary policy, not a fault → [rca](docs/rca/mobile-data-no-dsi-handle.md) |
-| Cellular — SIM 2 | ✅ | **Works.** `/ril_1` comes up alongside `/ril_0` and reads its card correctly — Airtel, MCC 404 / MNC 10, own IMEI, `PinRequired: none`. It reports `searching` only because the test SIM is deactivated. The old "Network: Denied" note was describing the wrong problem |
-| VoLTE | ⚠️ | **IMS registers with BSNL.** The modem's own `imsa` service (`0x21`, port `0x39`, message `0x20`) returns the P-Associated-URI pair the IMS core hands back in the `200 OK` to a successful `REGISTER` — a `sip:` identity at `ims.mnc080.mcc404.3gppnetwork.org` and the matching `tel:` — with message `0x21` reporting full service on both the VoIP and the VT entries, and zero deregistrations since. ofono's `IpMultimediaSystem.Registered` is *not* the evidence: it read `true` throughout the failure too. **Not ✅ yet: no VoLTE call has been placed, so SRVCC, codec negotiation and the CS fallback path are untested.** What did it was the donor, not another QMI call. `rjil.mbn` (`Commercial-Reliance`) is the only carrier config on this handset known to have produced working VoLTE on this exact modem, under LineageOS; `scripts/mcfg/retarget.py` points it at PLMN 404/80 and IIN 8991805, `scripts/mcfg/stage-rjil.sh` stages it with **stock** `row.mbn` alongside so a non-selection would have removed IMS entirely rather than be propped up by our patched fallback. qcril selected it for SUB0 first try without a reboot, and `qcril_qmi_imsa_reg_status_ind_hdlr: ims_registered: 1` arrived 23 seconds later. Its 80 EFS items turn out to be a strict superset of the 50 hand-built into `row_v61.mbn`: the import was incomplete, missing thirty items (`/Data_Profiles/Profile1..3`, the `pdp_profiles` call-profile numbers, the mmode domain preferences) and differing on one byte of an item it did copy — `ims/qp_ims_reg_config` byte 0, `01` in Jio's and `00` in ours. Which of those thirty-one differences is the trigger is not yet bisected, and it matters: the current state is Jio's config wearing BSNL's PLMN, so it also writes Jio's `qp_ims_ut_config`, SMSC and ePDG FQDN. SMS is so far unaffected (ofono still reports BSNL's real service centre, `Bearer = cs-preferred`). The long hunt before this — `setServiceStatus` in our `ofono-binder-plugin-ext-qti` fork, `setConfig` item 26, the `ConfigItem`→`QIPCALL_VOLTE_ENABLED` search, and the raw QMI client that reached `imss` directly — was aimed at a door this 2016 firmware does not have: `set_ims_service_enable_config` (`0x8f`/`0x90`) still answers `3 INTERNAL`, and IMS came up without either ever succeeding. Enablement here is NV-driven. Four earlier fixes remain load-bearing and are all still required: the MBN pipeline (`init.qcom.sh` never copied the configs), the MCC-404 fall-through to `ROW_Generic_3GPP` with `IMS_enable = 0`, the two hidden qcril gates (`sw_mbn_volte`/`sw_mbn_openmkt` ship empty, and an unchanged MCFG version is silently skipped), and `qipcall_config_items`. `droid-config-karatep` ships `karatep-modem-config.service`, which stages the configs from the device's own `/vendor` at boot — no proprietary bytes in the repo — and now needs updating to stage this config instead → [rca](docs/rca/volte-registration-change-is-test-mode.md) |
-| GPS | ✅ | Fixes on hardware, indoors: 8 satellites, ±9.6 m. Assistance was silently never fetched — XTRA and NTP injection were gated on ConnMan `online`, which its captive-portal probe never granted, so every fix was a cold start → [rca](docs/rca/gps-cold-start-no-assistance.md). Also bridged into Waydroid, position and satellites → [design](docs/waydroid-gps-bluetooth.md) |
-| Sensors — accelerometer | ✅ | display rotation follows the device, so the accelerometer reaches Qt through `sensorfw` and `hybris-libsensorfw-qt5-binder` |
-| Sensors — ambient light | ✅ | verified indirectly but by measurement: mce scales LED brightness by an ALS-derived level, and the LED measured 6% of full in a dark room against 40% in ordinary room light with the stock lux ladder — so lux readings do reach mce → [details](docs/porting-notes.md#the-current-setting-is-only-half-of-it--mce-throttles-the-led-by-ambient-light). Display auto-brightness itself has not been checked separately |
-| Sensors — proximity | ✅ | **Verified during a live call.** mce powers the sensor on demand (`UNDEF → OPEN` as the call starts, `OPEN → UNDEF` once it ends, confirming `on_demand=true` works) and ran four clean cover/uncover cycles, each driving a full `POWER_DOWN → MDSS_EVENT_BLANK → OFF` / `POWER_UP → UNBLANK → ON` round trip with a consistent 150–160 ms unblank |
-| Sensors — gyroscope, magnetometer | ❓ | the hardware is there: the vendor SSC config declares accel, gyro and mag axes (`karate-common/configs/sensors/sensor_def_qcomdev.conf`, `CONFIG_SENSORS_SSC=y`). Neither has been read on Sailfish |
-| Fingerprint (FPC 1020) | ✅ | enrolment and unlock verified on hardware (two templates enrolled, daemon cycles `IDENTIFYING`). Uses `sailfish-fpd-community` (Jolla's `sailfish-fpd` is unusable — no `sailfish-fpd-slave` exists for karatep) built from our fork (`Sailfish-on-karatep/sailfish-fpd-community`, `hybris-18.1`): this vendor HIDL 2.1 HAL never calls the enumerate callback when no templates exist, leaving the daemon wedged in `FPSTATE_ENUMERATING` forever, so `AndroidFP::enumerate()` arms a 3 s timeout and treats silence as "nothing enrolled". The same HAL quirk from the other side — `enumerate()` fails outright once templates *do* exist — made enrolled fingerprints appear lost after a reboot and blocked re-enrolment; also fixed in the fork. Enrolment, unlock and **removal** all verified. Root cause of every fingerprint fault here: the FPC vendor library returns the template *count* where `fingerprint.h` specifies 0, and the LineageOS HIDL adapter treated that as an error, so it never synthesised the `onEnumerate` callbacks and the daemon never learned a template id. Fixed in our fork of `android_hardware_lineage_interfaces`. **The rebuilt service must be installed onto `/vendor` by hand** — it is the one change an image build cannot deliver. One caveat worth knowing: templates live on `/data` and so **survive a reflash and a factory reset**, which is how a previous owner's finger can still unlock a freshly installed system → [details](docs/porting-notes.md#fingerprint-fpc-1020), [reflash caveat](docs/rca/stale-fingerprint-templates.md) |
-| Vibration | ✅ | `ngfd-plugin-native-vibrator` + `libhybris-libvibrator`; haptics work in the UI. No write-up — this row rests on use, not on a measurement |
-| Notification LED | ⚠️ | Lights for every pattern and breathes correctly; charging/charged and notification patterns verified on hardware. Brightness took three separate fixes, only two of which were the obvious ones: the `white` mce backend pinned to `/sys/class/leds/green` (autoprobe otherwise matches `redgreen` and leaves the real LED dark), the MPP sink raised from Lenovo's 5 mA to the 40 mA hardware ceiling, and — the dominant effect, and the one that made the first two look like they had failed — mce's `[BrightnessLed]` ALS curve, which floors at 6% and gave only 40% in room light. Measured peak on the node was 101/255 with the stock curve against 255/255 without it. Still ⚠️ because the 40 mA sink is not yet confirmed on hardware, and it cannot be tested without a reflash (`MSM_SPMI_DEBUGFS_RO` compiles debugfs register writes out). `PatternDeviceOn` does **not** light this LED despite being configured — measured, don't "fix" it. → [details](docs/porting-notes.md#notification-led) |
-| Keys — power, volume | ✅ | power blanks/unblanks and long-press reaches the power menu; volume adjusts |
-| Keys — back | ✅ | an ordinary `Qt::Key_Back`, handled by applications; worked throughout |
-| Keys — home, nav | ✅ | home → app switcher, square → top menu. The keys come from the touch controller and always worked; lipstick just needed them declared to `ssu-sysinfo` → [details](docs/porting-notes.md#hardware-keys) |
-| USB — networking | ✅ | RNDIS works in both the recovery and the booted system; the whole flashing procedure and every debug session run over it → [flashing.md](docs/flashing.md) |
-| USB — MTP / data | ❓ | `buteo-mtp-qt5` and `mtp-vendor-configuration-sailfish` are installed; never connected to a host as MTP |
-| Battery / charging | ⚠️ | charges over USB, and charge state is reported well enough that mce's charging/charged LED patterns fire from it. `jolla-actdead-charging` is installed but **act-dead** (charging with the device switched off) has not been tested |
-| Power off / reboot | ⚠️ | powers off cleanly much of the time, and intermittently wedges with the screen off, needing a hard reset. Ramoops shows userspace getting well into shutdown, the modem then failing to halt (`wait_for_shutdown_ack` timeout, `Port … halt timeout`), and PS_HOLD never reached. Not root-caused; the modem is the leading suspect, and the porter archive has zero prior art. A *graceful* `reboot` always hangs — `droid-hal-init.service` never stops — so use `reboot -f` → [investigation](docs/rca/shutdown-hang.md) |
-| Suspend / resume | ❌ | **measured, and it barely suspends.** 25 successes against 4423 failures; 4125 of those are `suspend_noirq` vetoed by `qpnp-vadc-14` with `-EBUSY`, plus 256 `failed_freeze`. mce put it at 181 s suspended across 34 786 s of uptime — 0.5%. Taken on USB, which holds `msm_otg`/`smbchg` wakelocks and explains why few attempts *start*, but not the noirq vetoes: a wakelock aborts before that stage, so those are a driver fault. A clean figure needs a run on battery. No idle-drain number on record yet, and `iphb` (socket `/dev/shm/iphb`, dsme's `iphb.so`) is present but cannot be exercised until this is fixed → [checklist](docs/hadk-compliance.md) |
-| RTC alarms | ❓ | `CONFIG_RTC_DRV_QPNP` is built in; no alarm has been tested, and a meaningful test depends on suspend/resume above |
-| FM radio | ⚠️ | **tuner works; audio needs a headset to test.** The image was never missing the app: `jolla-mediaplayer-radio` and the `irisradio` plugin have always been in the pattern — it is a plugin *inside* the Media app, not its own icon. What was missing was permission. `radio-iris-transport` is one `module_param_call` with no `module_init`, so the SMD channel opens only when something writes `fmsmd_set`; the plugin has done that write itself since 0.6.0, but `init.qcom.rc` leaves the parameter `system:system` and the failure was swallowed, so every ioctl returned `ENODEV`. `droid-fm-up.service` now hands it to the `audio` group (waiting for droid-hal-init's `on boot` rather than racing it), `999-droid-fm.rules` pins `/dev/radio0`, and `fmradio.conf` is back as a real symlink — the old "bogus stub" turns out to have been that same symlink, flattened. Verified end to end as `defaultuser` on a fresh boot: band 87.5–108.0 MHz read from the chip, tuning to 91.1/98.3/104.0 MHz confirmed by readback. **A second kernel bug then surfaced once a headset was attached: the app would not tune and hung on exit.** The iris event queue (256 entries) was never flushed — `iris_fops` had no `->open`, and the driver's only `kfifo_reset()` skips the event buffer by construction — so stale events accumulated across sessions until `kfifo_in_locked()` began silently dropping new ones without waking anybody. The plugin gates its whole UI on `IRIS_EVT_RADIO_READY` and is woken out of a blocking `VIDIOC_DQBUF` by `IRIS_EVT_RADIO_DISABLED`, so one dropped byte killed both tuning and teardown, permanently until reboot. Fixed in `b5cc23ebd72a`: the queue now evicts its oldest entry rather than discarding the newest, and is reset on open. **That was real but was not why the app failed.** The app runs under sailjail, where `/sys` is read-only and `/sys/module` is absent entirely, so the plugin's write to `fmsmd_set` — guarded by `QFile::exists()` — is silently skipped. `radio-iris-transport` has no `module_init`, so that write is the *only* thing that opens the APPS_FM channel; without it every ioctl returns `ENODEV` (`Failed to set control (id: 134217732)` in the journal), the worker blocks in `VIDIOC_DQBUF` and the GUI thread deadlocks behind it in `QThread::wait()`. Opening `/dev/radio0` *is* permitted in the sandbox, so `b5ea3d9bd494` opens the channel from the v4l `->open` instead, and waits for `SMD_EVENT_OPEN` so the open is synchronous. Verified without ever touching `fmsmd_set`: 93.5 MHz signal 168 stereo, 106.4 MHz signal 163, teardown wakes cleanly. Audio routing is still untested → [enablement](docs/rca/fm-radio-enablement.md), [event queue](docs/rca/fm-event-queue-overflow.md), [sandbox](docs/rca/fm-sandbox-cannot-open-transport.md) |
-| Module parameters | ✅ | **was an intermittent system-wide deadlock; fixed in the kernel.** On some boots `thermal-engine` writing `msm_thermal`'s `enabled` parameter deadlocks in `kthread_stop()` on a thread that sleeps in `wait_for_completion_interruptible()` and so never sees `kthread_should_stop()`. `kernel/params.c` guards every module parameter with one global mutex, so that wedges **all** `/sys/module/*/parameters/*` reads and writes for the rest of the boot. Casualties: FM radio, MTP's `mtp_rx_req_len`, and `init.qcom.post_boot.sh`, which dies partway through on `lpm_levels/sleep_disabled` and silently skips every tuning step after it. Also leaves `droid-hal-init` unkillable in `D` — a candidate explanation for the graceful-reboot hang, though not proven. Fixed twice over. `07b2c9ff34ff` orders a stop flag before the `complete()` so the thread cannot miss the wake, making the deadlock impossible; `3a06ccbcfede` removes the trigger entirely — the TSENS read failed because an inherited regression (`0498e1415d62`, a *strlcpy hardening* commit) copied the per-CPU sensor name with `sizeof()` on a `const char *`, truncating `tsens_tz_sensor0..7` to `tsens_t`. Verified across eight reboots: no deadlock, and `Unable to read TSENS` is gone from dmesg entirely. Bonus — CPU thermal mitigation now has working sensors for the first time (real temperatures, 8/8 CPUs online, no spurious offlining). On older kernels, `cat /sys/module/msm_thermal/parameters/enabled` hanging identifies an affected boot → [analysis](docs/rca/msm-thermal-param-lock-deadlock.md) |
-| Factory reset | ❌ | by design, not a regression: Sailfish's reset is a **btrfs snapshot rollback** needing `factory-@`/`factory-@home` subvolumes, and this port's rootfs is ext4 in a stowaway under `/data`. Settings reports success and erases nothing. Deliberately not worked around → [full analysis](docs/rca/factory-reset-does-nothing.md) |
-| Android apps (Waydroid) | ⚠️ | **usable, with gaps.** Touch works: Waydroid preferred xdg-shell, which lipstick only grew in 5.1 and does not route touch on, so our `android_hardware_waydroid` fork takes the `wl_shell` path Sailfish speaks natively. Touch also survives a display-size change now (`do_hotplug()` re-arms the touch FIFO). The container no longer kills the host's camera (`cgroup.clone_children`), and its own camera provider loads the host HAL instead of crash-looping. Hardware video decode works now too — the container has its own `/vendor`, so it lost the vendor property that disables split DPB/OPB, which this Venus firmware cannot do, and *no* video played. GPU acceleration is the real Adreno driver, the microphone records, and all eight sensors are bridged. GPS is bridged through the host's Geoclue, so both stacks can position at once. The battery is real now — the health HAL was overwriting the sysfs reading with a hardcoded 85 %-and-charging mock. Android is also on the host's time zone instead of GMT, and `~/Pictures`, `~/Videos`, `~/Music`, `~/Downloads` and `~/Documents` are the same directories on both sides. The system image is now the **GAPPS** build — Play Services, Play Store and GSF are installed and running — on the same `HALIUM_11` vendor. Still open: `configureStreams` rejects the JPEG stream because the install pairs an Android 13 system image with an Android 11 vendor; Android has no thermal HAL at all (`HAL Ready: false`), so it cannot throttle; per-app network accounting is permanently unavailable because Android 13's netd needs eBPF that a 3.18 kernel does not have; and **Android cannot reclaim memory inside the container** — `lmkd` has no pressure source (no `/dev/memcg`, read-only memory cgroup, no PSI on 3.18) and never kills anything, so the device thrashes instead, which surfaces as touch freezing for tens of seconds → [memory rca](docs/rca/waydroid-touch-anr-thrashing.md) → [feature status](docs/waydroid.md#feature-status), [touch rca](docs/rca/waydroid-touch-xdg-shell.md), [cgroup rca](docs/rca/waydroid-poisons-host-cgroups.md), [camera rca](docs/rca/waydroid-camera-hal-name.md), [video rca](docs/rca/waydroid-video-decode-split-mode.md), [battery rca](docs/rca/waydroid-battery-mocked.md), [waydroid.md](docs/waydroid.md) |
-| NFC | ➖ | no hardware |
-
-✅ verified on hardware · ⚠️ partial, or verified with a caveat · ❌ broken or not possible ·
-❓ no test on record · ➖ not applicable
-
----
-
-## Where to find what
-
-### In this repo
-
-| Path | What it is |
-|---|---|
-| [`docs/flashing.md`](docs/flashing.md) | **Start here to install.** Step-by-step flashing guide, plus troubleshooting for the errors this device actually produces. |
-| [`docs/los-recovery.md`](docs/los-recovery.md) | The LineageOS recovery this port builds and uses: how it is built, the karatep changes it carries, and the traps it hides. |
-| [`docs/porting-notes.md`](docs/porting-notes.md) | Accumulated device knowledge: partition map, fixes already in the tree, known workarounds, how to debug the boot. |
-| [`docs/rca/`](docs/rca/) | Root-cause write-ups for bugs that were properly diagnosed. |
-| [`docs/waydroid.md`](docs/waydroid.md) | Running Android apps via Waydroid: the kernel options it needs, how the packages are built, and the Sailfish OS 5.1 regression to be aware of first. |
-| [`docs/rca/waydroid-devpts.md`](docs/rca/waydroid-devpts.md) | Why the Waydroid container refused to start: `CONFIG_DEVPTS_MULTIPLE_INSTANCES`, plus the overlayfs limitation found alongside it. |
-| [`docs/rca/waydroid-poisons-host-cgroups.md`](docs/rca/waydroid-poisons-host-cgroups.md) | Why running Waydroid kills the Sailfish camera until the next reboot: the container writes the host's cgroup v1 cpuset hierarchy. |
-| [`docs/rca/waydroid-touch-xdg-shell.md`](docs/rca/waydroid-touch-xdg-shell.md) | Why Waydroid touch is dead under lipstick: SFOS 5.1 added xdg_shell, Waydroid prefers it over wl_shell, and lipstick's xdg path does not route touch. |
-| [`docs/rca/waydroid-camera-hal-name.md`](docs/rca/waydroid-camera-hal-name.md) | Why Waydroid's camera provider crash-looped every 5 s: the HAL is probed as camera.waydroid.so, not camera.qcom.so. |
-| [`docs/rca/gps-cold-start-no-assistance.md`](docs/rca/gps-cold-start-no-assistance.md) | Why every GPS fix was a cold start: XTRA and NTP injection were gated on ConnMan reaching "online", which its captive-portal probe never granted. |
-| [`docs/rca/waydroid-touch-after-unlock.md`](docs/rca/waydroid-touch-after-unlock.md) | Touch dead after an unlock — unresolved, with the two theories already eliminated so they are not re-run. |
-| [`docs/rca/waydroid-touch-anr-thrashing.md`](docs/rca/waydroid-touch-anr-thrashing.md) | Why touch stops for ~20 s and then comes back: not the input path at all — the device thrashes at 13 MB free with zram full, and neither `lmkd` nor the host's `lowmemorykiller` can fire. |
-| [`docs/waydroid-gps-bluetooth.md`](docs/waydroid-gps-bluetooth.md) | Why neither GPS nor Bluetooth reaches the Waydroid container, and why only one of the two is worth fixing. |
-| [`docs/rca/waydroid-video-decode-split-mode.md`](docs/rca/waydroid-video-decode-split-mode.md) | Why no video plays inside Waydroid: the container's own `/vendor` drops the device's video tuning properties, so the decoder asks Venus for split DPB/OPB and the firmware rejects the session. |
-| [`docs/rca/waydroid-battery-mocked.md`](docs/rca/waydroid-battery-mocked.md) | Why Android always showed 85 % and charging: the container could read the real battery all along, and Waydroid's health HAL overwrote it with constants. |
-| [`docs/rca/sphal-hidl-memory.md`](docs/rca/sphal-hidl-memory.md) | Why the camera app aborts at the end of video playback: the sphal namespace cannot reach the VNDK APEX, so HIDL shared memory never loads. |
-| [`docs/rca/voice-call-dsp-calibration.md`](docs/rca/voice-call-dsp-calibration.md) | Why in-call volume cannot be set: the ADSP rejects the CVP voice device config with `ADSP_EBADPARAM` and fails every volume step — a known unresolved issue on 64-bit ports, not a karatep bug. |
-| [`docs/hadk-compliance.md`](docs/hadk-compliance.md) | Chapter-by-chapter audit of this port against the HADK: what complies, what was fixed, and which deviations are deliberate. |
-| [`docs/useful-commands.md`](docs/useful-commands.md) | Short command reference (rebooting to fastboot/recovery from Sailfish, etc.). |
-| [`manifests/local_manifests.xml`](manifests/local_manifests.xml) | The `repo` local manifest. Copy to `$ANDROID_ROOT/.repo/local_manifests/`. |
-| [`scripts/flash.sh`](scripts/flash.sh) | Semi-automated flasher; discovers the USB network address itself. |
-
-### Other repos in the organisation
-
-| Repo | Role |
-|---|---|
-| [`karatep-patches`](https://github.com/Sailfish-on-karatep/karatep-patches) | The four Android-source patches that **cannot** be carried as a fork, because they are written against the tree *after* `mer-hybris/hybris-patches` has been applied. Applied as a second pass. Upstream's series is synced normally and is not forked. |
-| [`hybris-boot`](https://github.com/Sailfish-on-karatep/hybris-boot) | Fork of `mer-hybris/hybris-boot` carrying the karatep entry in `fixup-mountpoints`. |
-| [`android_device_lenovo_karatep`](https://github.com/Sailfish-on-karatep/android_device_lenovo_karatep) | Device tree. |
-| [`android_device_lenovo_karate-common`](https://github.com/Sailfish-on-karatep/android_device_lenovo_karate-common) | Shared `karate` family device tree (`fstab.qcom` lives here). |
-| [`android_kernel_lenovo_msm8937`](https://github.com/Sailfish-on-karatep/android_kernel_lenovo_msm8937) | Kernel 3.18 + `karatep_defconfig`. |
-| [`proprietary_vendor_lenovo`](https://github.com/Sailfish-on-karatep/proprietary_vendor_lenovo) | Vendor blobs. |
-| [`droid-hal-karatep`](https://github.com/Sailfish-on-karatep/droid-hal-karatep) | `droid-hal` packaging (`rpm/`). |
-| [`droid-config-karatep`](https://github.com/Sailfish-on-karatep/droid-config-karatep) | Sailfish-side device configuration, `sparse/` overlay, patterns, kickstart. |
-| [`droid-hal-version-karatep`](https://github.com/Sailfish-on-karatep/droid-hal-version-karatep) | Version package. |
-
----
-
-## Building
-
-Follow the [HADK](https://hadk.sailfishos.org/) — this port adds nothing unusual to the
-procedure. In outline, with `$ANDROID_ROOT` set:
-
-```sh
-# 1. Sources. local_manifests.xml is the only karatep-specific step: it repins the
-#    device trees, kernel, vendor blobs, droid-hal/-config and hybris-boot at the
-#    Sailfish-on-karatep forks, and adds karatep-patches.
-repo init -u https://github.com/mer-hybris/android.git -b hybris-18.1
-cp manifests/local_manifests.xml $ANDROID_ROOT/.repo/local_manifests/karatep.xml
-repo sync
-
-# 2. Patches, in this order. Nothing is ever edited in the tree by hand.
-hybris-patches/apply-patches.sh --mb       # mer-hybris' series (plain HADK step)
-karatep-patches/apply-patches.sh --mb      # the four karatep patches, on top
-
-# 3. Android HAL (HABUILD SDK). HADK specifies `breakfast`, not `lunch`.
-source build/envsetup.sh
-export USE_CCACHE=1
-breakfast karatep
-make -j$(nproc --all) hybris-hal droidmedia
-
-# 4. Droid HAL packaging (PLATFORM SDK, from $ANDROID_ROOT), in this order
-rpm/dhd/helpers/build_packages.sh --droid-hal
-rpm/dhd/helpers/build_packages.sh --configs
-rpm/dhd/helpers/build_packages.sh --mw
-rpm/dhd/helpers/build_packages.sh --gg
-rpm/dhd/helpers/build_packages.sh --version
-
-# 5. Root filesystem image. RELEASE must be exported or --mic refuses to run.
-export RELEASE=5.1.0.11
-rpm/dhd/helpers/build_packages.sh --mic
+```powershell
+adb devices -l
 ```
 
-> **Check the boot image before flashing.** `Install: … hybris-boot.img` at the end of the
-> Android build is not proof of success. hybris-boot builds its ramdisk with
-> `find … | cpio -H newc -o | gzip -9`, and **the Jolla Ubuntu chroot does not ship `cpio`** —
-> the pipeline then emits nothing, `gzip` still exits 0, and make happily writes an image with
-> no `init`. Flashing it drops the device into Qualcomm bulk mode (`05c6:900e`) with no USB
-> networking, so the installer waits forever for a recovery shell that never appears.
->
-> ```sh
-> ls -l out/target/product/karatep/{kernel,hybris-boot.img}
-> # good: hybris-boot.img is ~1.5 MB larger than kernel
-> # bad:  the difference is a few kilobytes -> no initramfs
-> ```
->
-> Fix once per chroot with `sudo apt-get install -y cpio`, then delete
-> `out/target/product/karatep/obj/ROOT/hybris-{boot,recovery}_intermediates` — a 20-byte
-> `boot-initramfs.gz` is otherwise considered up to date. Details in
-> [`docs/porting-notes.md`](docs/porting-notes.md#cause-cpio-is-missing-from-the-habuild-chroot).
+Run the read-only diagnostic collector:
 
-Everything device-specific is either a fork repinned in `local_manifests.xml` (the HADK's
-"Contribute your mods back" pattern) or one of the four patches in `karatep-patches`. There is
-no other local state, so the same two files reproduce the tree on any machine.
+```powershell
+.\tools\collect-rmx3701.ps1
+```
 
-Then see [`docs/flashing.md`](docs/flashing.md).
+The report is written to `reports\rmx3701-diagnostic-<timestamp>.txt`. Review and redact SIM identifiers before sharing it.
 
----
+## MTS `iccid_0` workaround
 
-## Credits
+The experimental helper is documented at [scripts/rmx3701-mts-iccid-workaround.sh](scripts/rmx3701-mts-iccid-workaround.sh). It is **not run automatically** and must be invoked explicitly. It refuses to overwrite an unrelated non-empty value and creates a backup first. Do not enable it for another carrier without understanding that carrier's `iccid_0` format on this firmware.
 
-Built on the work of the Sailfish OS porters community — particularly **@mal** and
-**@elros34** on `#sailfishos-porters`, whose advice is cited throughout
-[`docs/porting-notes.md`](docs/porting-notes.md).
+## Safety
 
-Sailfish OS is a product of [Jolla](https://jolla.com/). This is an unofficial community
-adaptation with no affiliation or warranty.
+- Back up `/data/vendor/radio/qcrilNr.db` and check for WAL/SHM sidecars before any future database operation. Never replace the live database with a vendor template and never delete it as a shortcut.
+- Do not reuse upstream karatep scripts that assume Sailfish OS, `/data/vendor/radio/qcril.db`, `/data/vendor/radio/modem_config/mcfg_sw`, `/usr/bin/python3`, `/home/defaultuser`, `diagcat.py`, or the `ril-daemon` service. RMX3701 uses different paths and service names that must be verified independently.
+- Do not flash `modem_a`/`modem_b` as part of this toolkit.
+- Do not write QMI/NV/EFS data from scripts unless a separate operation-specific design, backup, validation and rollback plan exists.
+- The owner's real ICCID must not be committed into public repository history.
+
+## Upstream
+
+This repository was derived from MBN/IMS research in [sailfish-on-karatep/karatep-port](https://github.com/sailfish-on-karatep/karatep-port), especially its MBN-selection analysis. The upstream device is a Lenovo Vibe K6 Note/Plus running Sailfish OS; its executable scripts are **not directly compatible with RMX3701**.
+
+## Scope
+
+Prefer small, reviewable changes. Each script must say whether it is read-only, backs up state, or mutates the device. Potentially destructive modem/database operations must be opt-in and include a tested rollback path. Do not add generic ROM-building, Waydroid, flashing, or unrelated hardware-debugging material here.
