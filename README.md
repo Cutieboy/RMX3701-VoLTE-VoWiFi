@@ -31,11 +31,13 @@ Confirm ADB connectivity:
 adb devices -l
 ```
 
-Run the read-only diagnostic collector:
+Run the read-only diagnostic collector from the repository root:
 
 ```powershell
 .\tools\collect-rmx3701.ps1
 ```
+
+The collector is read-only and does not intentionally collect the raw ICCID file contents.
 
 The report is written to `reports\rmx3701-diagnostic-<timestamp>.txt`. Review and redact SIM identifiers before sharing it.
 
