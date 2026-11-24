@@ -40,3 +40,15 @@ The causal mechanism has not been isolated because multiple changes occurred. Do
 - Do not invent MBN metadata values or assume MNC padding from another build.
 - Keep MTS-specific behavior clearly labelled.
 - Successful calling does not prove the full root cause of MBN index generation.
+
+## 2026-11-24 read-only post-reboot recheck
+
+[CONFIRMED] ADB connected to `192.168.1.195:5555`; product RMX3701 / RE58D1L1. Build display `RMX3701_16.0.5.1300(EX01)`, Android 16, security patch 2026-09-01, baseband `Q_V1_P14`. Operator property `25001,40102` includes MTS PLMN 25001.
+
+[CONFIRMED] Current radio properties at this audit: `persist.vendor.radio.sw_mbn_loaded` was empty/unset; `persist.vendor.radio.sw_mbn_update=true`; `persist.vendor.radio.mbn_path=/data/vendor/modem_config/`. This supersedes the older property snapshot above; property values can change across boots and must be rechecked before a future action.
+
+[CONFIRMED] Both `/data/adb/service.d/00_adbtcpport.sh` and `01_mts_mbn_trigger.sh` exist by metadata. The latter contains a private subscriber identifier on the live device; do not copy it into public source, reports or handoffs.
+
+[CONFIRMED] The only Oplus VoWiFi module directory returned by the current module listing is the BOM-prefixed `﻿oplus_vowifi_unlock`; its `disable` marker exists. The standard-named `oplus_vowifi_unlock` directory was absent at this check. The owner reports VoLTE, VoWiFi, Mouse VPN and Batman VPN all remain working after reboot.
+
+[UNRESOLVED] The successful state followed several simultaneous changes and reboot. Do not attribute it solely to the ICCID trigger, MBN property, module disable or reboot without a controlled, owner-approved test. Preserve the current state while functional.
