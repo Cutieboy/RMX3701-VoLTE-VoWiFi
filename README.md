@@ -23,7 +23,7 @@ It provides concise RMX3701-specific documentation, a **read-only** ADB/PowerShe
 
 It does **not** insert guessed rows into `qcrilNr.db`, rewrite arbitrary MBN files, modify modem NV/EFS, flash modem partitions, blindly restart RIL/QCRIL services, or claim that changing `iccid_0` is the universal solution for all carriers.
 
-## Quick start (Windows PowerShell 7 + ADB over Wi-Fi)
+## Quick start (Windows PowerShell 5.1+ + ADB)
 
 Confirm ADB connectivity:
 
@@ -35,15 +35,17 @@ Run the read-only diagnostic collector from the repository root:
 
 ```powershell
 .\tools\collect-rmx3701.ps1
+# When more than one ADB device is online:
+.\tools\collect-rmx3701.ps1 -Device <ADB_SERIAL>
 ```
 
-The collector is read-only and does not intentionally collect the raw ICCID file contents.
+The collector requires exactly one online device unless `-Device` selects an exact serial. Every subsequent ADB command is pinned to that serial, and the selected target must identify as RMX3701 / RE58D1L1.
 
-The report is written to `reports\rmx3701-diagnostic-<timestamp>.txt`. Review and redact SIM identifiers before sharing it.
+The report is sanitized **before it is written**: subscriber identifiers, phone numbers, IMS identities, cell IDs, MAC and IP addresses are redacted. The collector does not read or hash `iccid_0`, does not save a raw diagnostic copy, and does not run a full `dumpsys connectivity` export. Generated diagnostic reports are git-ignored. Review the resulting file before sharing; automated redaction is a safeguard, not a guarantee against every future vendor-specific identifier.
 
 ## MTS `iccid_0` workaround
 
-The experimental helper is documented at [scripts/rmx3701-mts-iccid-workaround.sh](scripts/rmx3701-mts-iccid-workaround.sh). It is **not run automatically**. It requires both a locally supplied `RMX3701_MTS_ICCID` value and an explicit `--force` argument, creates a backup, and refuses to overwrite an unrelated non-empty value. Do not enable it for another carrier without understanding that carrier's `iccid_0` format on this firmware.
+The experimental helper is documented at [scripts/rmx3701-mts-iccid-workaround.sh](scripts/rmx3701-mts-iccid-workaround.sh). It is **not run automatically**. It requires a locally supplied 19- or 20-digit `RMX3701_MTS_ICCID` value and an explicit `--force` argument. It refuses symlink targets and unknown/currently different ICCID values, verifies a byte-for-byte backup, stages the new file with expected owner/mode/SELinux context, and verifies the final contents and metadata after replacement. If final verification fails, it attempts restoration from the backup and keeps recovery material when that restoration cannot be verified. The helper has not been run against the live device during this review. Do not enable it for another carrier without understanding that carrier's `iccid_0` format on this firmware.
 
 ## Safety
 
