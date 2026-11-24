@@ -43,7 +43,7 @@ The causal mechanism has not been isolated because multiple changes occurred. Do
 
 ## 2026-11-24 read-only post-reboot recheck
 
-[CONFIRMED] ADB connected to `192.168.1.195:5555`; product RMX3701 / RE58D1L1. Build display `RMX3701_16.0.5.1300(EX01)`, Android 16, security patch 2026-09-01, baseband `Q_V1_P14`. Operator property `25001,40102` includes MTS PLMN 25001.
+[CONFIRMED] ADB connected to `[private Wi-Fi address omitted]`; product RMX3701 / RE58D1L1. Build display `RMX3701_16.0.5.1300(EX01)`, Android 16, security patch 2026-09-01, baseband `Q_V1_P14`. Operator property `25001,40102` includes MTS PLMN 25001.
 
 [CONFIRMED] Current radio properties at this audit: `persist.vendor.radio.sw_mbn_loaded` was empty/unset; `persist.vendor.radio.sw_mbn_update=true`; `persist.vendor.radio.mbn_path=/data/vendor/modem_config/`. This supersedes the older property snapshot above; property values can change across boots and must be rechecked before a future action.
 
